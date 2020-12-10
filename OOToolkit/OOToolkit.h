@@ -11,6 +11,7 @@
 #include <mutex>
 #include <unordered_map>
 
+// FreeType
 #include <proto-include.h>
 
 #include "dr_wav.h"
@@ -27,8 +28,6 @@
 #define GRAPHICS_USES_FONT
 #define DEBUGLOG OOLog(__FUNCTION__)
 #define CONTROLLER_ANY_USER (-1)
-//#define MAKE_TOOLKIT(varname) std::unique_ptr<OOToolkit> varname = std::make_unique<OOToolkit>()
-#define MAKE_TOOLKIT(varname) OOToolkit *varname = new OOToolkit()
 
 #define AUDIO_GRAIN (256)
 
@@ -42,19 +41,20 @@
 // Never call this function, it's called by OOToolkit automatically when an error occurs.
 void OOerrorOut(const char* file, const char* func, int line, const char* msg = nullptr);
 
-// Color is used to pack together RGB information, and is used for every function that draws colored pixels.
-typedef struct Color {
+// Color is used to pack together RGBA information, and is used for every function that draws colored pixels.
+struct Color {
 	uint8_t r;
 	uint8_t g;
 	uint8_t b;
+	uint8_t a; // no alpha yet.
 } Color;
 
-typedef struct TextDimm {
+struct TextDim {
 	int w; // width
 	int h; // height
 } TextDimm;
 
-typedef struct SpriteDimm {
+struct SpriteDim {
 	int w; // width
 	int h; // height
 	int c; // channels
@@ -100,7 +100,7 @@ public:
 	std::string GetUserName();
 };
 
-class OOScene2D; // fix a compilation error.
+class OOScene2D; // cyclic dependency, OOPNG wants OOScene2D which is dependant on OOPNG.
 
 class OOPNG {
 	int width;
@@ -119,11 +119,9 @@ public:
 };
 
 class OOScene2D {
-#ifdef GRAPHICS_USES_FONT
 	FT_Library ftLib;
 	std::vector<FT_Face> fonts;
 	std::vector<OOPNG> sprites;
-#endif
 
 	int width;
 	int height;
@@ -183,29 +181,27 @@ public:
 
 	void Commit();
 
-#ifdef GRAPHICS_USES_FONT
 	int InitFont(const std::string& fname, int fontSize);
 	int InitFont(size_t bufSize, unsigned char *fontBuf, int fontSize);
 	bool FreeFont(int index);
 	void DrawText(const std::string& txt, int font, int startX, int startY, Color col);
 	void CalcTextDimm(char *txt, FT_Face face, TextDimm *textDimm);
 	void DrawTextContainer(char *txt, FT_Face face, int startX, int startY, int maxW, int maxH);
-#endif
 };
 
-typedef struct OOSampleData {
+struct OOSampleData {
 	size_t sampleOffset;
 	size_t sampleCount;
-	uint16_t channels;
 	int16_t *sampleData;
+	int channels;
 } OOSampleData;
 
-typedef struct OOAudioThreadData {
+struct OOAudioThreadData {
 	bool pause; // should the thread pause?
 	bool stop; // should the thread stop itself?
 	bool done; // the thread had finished and the sound will no longer be playing.
 	uint8_t volume; // 0 - total silent, 255 - full volume.
-	int mysound;
+	int mysound; // sound file index.
 } OOAudioThreadData;
 
 class OOAudio {
