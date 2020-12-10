@@ -1,0 +1,42 @@
+<?xml version="1.0"?>
+<psproject xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" fmt="gp4" version="1000">
+  <volume>
+    <volume_type>pkg_ps4_app</volume_type>
+    <volume_ts>2020-05-14 23:15:00</volume_ts>
+    <package content_id="IV1337-BREW01010_00-OPENORBISTOOLKIT" passcode="00000000000000000000000000000000" storage_type="digital50" app_type="full" />
+    <chunk_info chunk_count="1" scenario_count="1">
+      <chunks>
+        <chunk id="0" layer_no="0" label="Chunk #0" />
+      </chunks>
+      <scenarios default_id="0">
+        <scenario id="0" type="sp" initial_chunk_count="1" label="Scenario #0">0</scenario>
+      </scenarios>
+    </chunk_info>
+  </volume>
+  <files img_no="0">
+	<!-- Mandatory files -->
+    <file targ_path="sce_sys/icon0.png" orig_path="sce_sys/icon0.png" />
+	<file targ_path="sce_sys/pic0.png" orig_path="sce_sys/pic0.png" />
+	<file targ_path="sce_sys/pic1.png" orig_path="sce_sys/pic1.png" />
+    <file targ_path="eboot.bin" orig_path="../eboot.bin" />
+    <file targ_path="sce_sys/param.sfo" orig_path="sce_sys/param.sfo" />
+    <file targ_path="sce_sys/about/right.sprx" orig_path="sce_sys/about/right.sprx" />
+    <file targ_path="sce_module/libSceFios2.prx" orig_path="sce_module/libSceFios2.prx" />
+    <file targ_path="sce_module/libc.prx" orig_path="sce_module/libc.prx" />
+	
+	<!-- Your files go here -->
+	<file targ_path="assets/image.png" orig_path="assets/image.png" />
+	<!-- <file targ_path="assets/music.wav" orig_path="assets/music.wav" /> -->
+	<file targ_path="assets/power.mp3" orig_path="assets/power.mp3" />
+	<file targ_path="assets/font.ttf" orig_path="assets/font.ttf" />
+  </files>
+  <rootdir>
+    <dir targ_name="sce_sys">
+      <dir targ_name="about" />
+    </dir>
+    <dir targ_name="sce_module" />
+	
+	<!-- Your directories go here -->
+	<dir targ_name="assets" />
+  </rootdir>
+</psproject>
