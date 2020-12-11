@@ -32,11 +32,11 @@
 #define AUDIO_GRAIN (256)
 
 // color defines.
-#define COLOR_WHITE { 255, 255, 255 }
-#define COLOR_BLACK { 0,   0,   0   }
-#define COLOR_RED   { 255, 0, 0 }
-#define COLOR_GREEN { 0, 255, 0 }
-#define COLOR_BLUE  { 0, 0, 255 }
+#define COLOR_WHITE { 255, 255, 255, 255 }
+#define COLOR_BLACK { 0,   0,   0,   255 }
+#define COLOR_RED   { 255, 0, 0, 255 }
+#define COLOR_GREEN { 0, 255, 0, 255 }
+#define COLOR_BLUE  { 0, 0, 255, 255 }
 
 // Never call this function, it's called by OOToolkit automatically when an error occurs.
 void OOerrorOut(const char* file, const char* func, int line, const char* msg = nullptr);
@@ -47,18 +47,18 @@ struct Color {
 	uint8_t g;
 	uint8_t b;
 	uint8_t a; // no alpha yet.
-} Color;
+};
 
 struct TextDim {
 	int w; // width
 	int h; // height
-} TextDimm;
+};
 
 struct SpriteDim {
 	int w; // width
 	int h; // height
 	int c; // channels
-} SpriteDimm;
+};
 
 class OOLog {
 	std::stringstream debugLogStream;
@@ -66,7 +66,10 @@ public:
 	OOLog(const std::string & funcName);
 	~OOLog();
 
-	template <class T> OOLog &operator<<(const T &v) { this->debugLogStream << v; return *this; }
+	template <class T> OOLog& operator<<(const T &v) {
+		this->debugLogStream << v;
+		return *this;
+	}
 };
 
 class OOController {
@@ -115,7 +118,7 @@ public:
 
 	bool IsFreed();
 	void Draw(OOScene2D *scene, int startX, int startY);
-	void GetInfo(SpriteDimm* out);
+	void GetInfo(SpriteDim* out);
 };
 
 class OOScene2D {
@@ -131,7 +134,7 @@ class OOScene2D {
 	off_t directMemOff;
 	size_t directMemAllocationSize;
 
-	uintptr_t videoMemSP;
+	char* videoMemSP;
 	void *videoMem;
 
 	char **frameBuffers;
@@ -153,6 +156,7 @@ class OOScene2D {
 	bool initFont(FT_Face *face, const char *fontPath, int fontSize);
 	bool initMemFont(FT_Face *face, size_t bufSize, unsigned char* fontBuf, int fontSize);
 	void drawText(const char *txt, FT_Face face, int startX, int startY, Color col);
+	void calcTextDim(const char *txt, FT_Face face, TextDim *textDimm);
 
 public:
 	OOScene2D(int w, int h, int pixelDepth);
@@ -177,7 +181,7 @@ public:
 	int InitPNG(const std::string& fname);
 	int InitPNG(size_t bufSize, unsigned char *pngBuf);
 	void FreePNG(int index);
-	void CalcSpriteDimm(int sprite, SpriteDimm *out);
+	void CalcSpriteDim(int sprite, SpriteDim *out);
 
 	void Commit();
 
@@ -185,7 +189,7 @@ public:
 	int InitFont(size_t bufSize, unsigned char *fontBuf, int fontSize);
 	bool FreeFont(int index);
 	void DrawText(const std::string& txt, int font, int startX, int startY, Color col);
-	void CalcTextDimm(char *txt, FT_Face face, TextDimm *textDimm);
+	void CalcTextDim(const std::string& txt, int font, TextDim *textDimm);
 	void DrawTextContainer(char *txt, FT_Face face, int startX, int startY, int maxW, int maxH);
 };
 
@@ -194,7 +198,7 @@ struct OOSampleData {
 	size_t sampleCount;
 	int16_t *sampleData;
 	int channels;
-} OOSampleData;
+};
 
 struct OOAudioThreadData {
 	bool pause; // should the thread pause?
@@ -202,7 +206,7 @@ struct OOAudioThreadData {
 	bool done; // the thread had finished and the sound will no longer be playing.
 	uint8_t volume; // 0 - total silent, 255 - full volume.
 	int mysound; // sound file index.
-} OOAudioThreadData;
+};
 
 class OOAudio {
 	int32_t audioHandle;

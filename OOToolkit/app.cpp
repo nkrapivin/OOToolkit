@@ -89,14 +89,16 @@ bool Application::Frame() {
 		int x = 128, y = 64;
 
 		// get sprite w/h
-		SpriteDimm sd;
-		this->kit->GetScene2D()->CalcSpriteDimm(catsprite, &sd);
+		SpriteDim sd;
+		this->kit->GetScene2D()->CalcSpriteDim(catsprite, &sd);
 
 		// loop the cat sprite.
 		this->kit->GetScene2D()->DrawPNG(counter, MIDDLE_Y - sd.h / 2, catsprite);
 
 		// reset our frame counter.
-		if (counter > FRAME_WIDTH + sd.w) counter = 0;
+		if (counter > FRAME_WIDTH) {
+			counter = 0;
+		}
 
 		stick ls = { 0, 0 };
 		this->kit->GetController()->GetStick(false, &ls);
