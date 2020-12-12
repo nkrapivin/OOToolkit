@@ -1,21 +1,21 @@
 #include "app.h"
 
 Application::Application() {
-	DEBUGLOG << "AppConstructor";
+	this->Load();
 }
 
 Application::~Application() {
-	DEBUGLOG << "AppDestructor";
+	this->Quit();
+	delete this->kit;
 }
 
 void Application::Load() {
-	DEBUGLOG << "Application::Load()!";
-
 	// reset frame counter
 	this->counter = 0;
 
 	// initialize OOToolkit and it's subsystems.
-	this->kit = std::make_unique<OOToolkit>();
+	this->kit = new OOToolkit();
+	this->kit->GetTcpClient()->Connect("192.168.1.218", 9190);
 	this->kit->GetController()->Init(CONTROLLER_ANY_USER);
 	this->kit->GetScene2D(FRAME_WIDTH, FRAME_HEIGHT, FRAME_DEPTH)->Init(FRAME_MEMSIZE, FRAME_NUMBUF);
 	this->kit->GetAudio()->Init();
@@ -56,6 +56,8 @@ void Application::Load() {
 }
 
 bool Application::Frame() {
+
+	
 	this->kit->GetController()->UpdateState();
 	{
 		// Step Event
@@ -76,14 +78,13 @@ bool Application::Frame() {
 		}
 	}
 
-	
 	this->kit->GetScene2D()->FrameBufferClear();
 	{
 		// Draw Event
 		std::stringstream dr{"OpenOrbis Toolkit Demo."};
 		int myfont = this->fonts.front(); // use the first font.
 		int catsprite = this->sprites.front(); // first sprite.
-		int snd0 = this->sounds.front();
+		int snd0 = this->sounds.front(); // first sound.
 
 		// x and y position for the text.
 		int x = 128, y = 64;
@@ -92,30 +93,40 @@ bool Application::Frame() {
 		SpriteDim sd;
 		this->kit->GetScene2D()->CalcSpriteDim(catsprite, &sd);
 
-		// loop the cat sprite.
-		this->kit->GetScene2D()->DrawPNG(counter, MIDDLE_Y - sd.h / 2, catsprite);
-
 		// reset our frame counter.
 		if (counter > FRAME_WIDTH) {
 			counter = 0;
 		}
 
+		// get stick x/y
 		stick ls = { 0, 0 };
 		this->kit->GetController()->GetStick(false, &ls);
 
 		// make our draw string.
 		dr <<
-		std::endl << "Sprite XPos: " << counter <<
-		std::endl << "Is first sound playing? " << (this->kit->GetAudio()->IsPlaying(snd0) ? "Yes" : "No") <<
-		std::endl << "Logged on as " << this->kit->GetController()->GetUserName() <<
-		std::endl << "Your logged on user id is " << this->kit->GetController()->GetUserID() <<
-		std::endl << "Left Stick X/Y " << static_cast<int>(ls.x) << "/" << static_cast<int>(ls.y) <<
-		std::endl << "Have fun!" << std::endl;
+			std::endl << "Sprite XPos: " << counter <<
+			std::endl << "Is first sound playing? " << (this->kit->GetAudio()->IsPlaying(snd0) ? "Yes" : "No") <<
+
+			// OOController class has our user id.
+			std::endl << "Logged on as " << this->kit->GetController()->GetUserName() <<
+			std::endl << "Your logged on user id is " << this->kit->GetController()->GetUserID() <<
+
+			// ...and obviously the stick axises.
+			std::endl << "Left Stick X/Y " << static_cast<int>(ls.x) << "/" << static_cast<int>(ls.y) <<
+
+			// :)
+			std::endl << "Have fun!" << std::endl;
+
+		
+		// loop the cat sprite.
+		this->kit->GetScene2D()->DrawPNG(counter, MIDDLE_Y - sd.h / 2, catsprite);
 
 		// draw text.
 		this->kit->GetScene2D()->DrawText(dr.str(), myfont, x, y, this->drawCol);
+		
 	}
 	this->kit->GetScene2D()->Commit();
+	
 
 	counter++;
 

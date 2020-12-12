@@ -24,22 +24,134 @@
 #define DR_WAV_IMPLEMENTATION
 #include "dr_wav.h"
 
+#include <sys/socket.h>
+#include <arpa/inet.h>
+
 
 #define OOAUDIOINST (UINT16_MAX)
 
+#pragma region // OOTcpClient
+
+OOTcpClient::OOTcpClient() {
+	this->connected = false;
+	this->sock = -1;
+	this->myStream.clear();
+}
+
+OOTcpClient::~OOTcpClient() {
+	if (this->connected) {
+		close(this->sock);
+		this->sock = -1;
+		this->connected = false;
+		this->myStream.clear();
+	}
+}
+
+void OOTcpClient::Connect(const std::string& host, uint16_t port) {
+	int rc;
+	struct sockaddr_in server_address;
+	int enable = 1;
+	timespec ts;
+	ts.tv_sec = 5;
+	ts.tv_nsec = 0;
+
+	this->connected = false;
+	this->sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	if (this->sock < 0) {
+		return;
+	}
+
+	// set Keep-Alive option and receive timeout.
+	setsockopt(this->sock, SOL_SOCKET, 0x0008, reinterpret_cast<void*>(&enable), sizeof(enable));
+	setsockopt(this->sock, SOL_SOCKET, 0x1006, reinterpret_cast<void*>(&ts), sizeof(ts));
+
+	// prepare server address structure.
+	memset(&server_address, 0, sizeof(server_address));
+	server_address.sin_family = AF_INET;
+	server_address.sin_port = htons(port);
+	server_address.sin_addr.s_addr = inet_addr(host.c_str());
+
+	rc = connect(this->sock, reinterpret_cast<const sockaddr *>(&server_address), sizeof(server_address));
+	if (rc < 0) {
+		close(this->sock);
+		return;
+	}
+
+	// send a dummy message to be SURE we're connected.
+	const char* msg = "Hello from OOToolkit!\n";
+	rc = send(this->sock, msg, strlen(msg), 0);
+	if (rc != strlen(msg)) {
+		close(this->sock);
+		return;
+	}
+
+	this->connected = true;
+}
+
+bool OOTcpClient::IsConnected() {
+	return this->connected;
+}
+
+ssize_t OOTcpClient::Flush() {
+	if (this->connected) {
+		// get stream contents as a string.
+		const std::string& str = this->myStream.str();
+		size_t len = str.length();
+
+		// send it (and clear the stream)
+		ssize_t recv = send(this->sock, str.c_str(), len, 0);
+
+		// wipe the stream.
+		this->myStream.str(std::string());
+		this->myStream.clear();
+
+		return recv;
+	}
+
+	return -1;
+}
+
+std::string OOTcpClient::Receive() {
+	if (this->connected) {
+		ssize_t rc;
+		char rbuf[65535 + 1]; // 1 - nullbyte.
+		memset(rbuf, 0, sizeof(rbuf));
+
+		rc = recv(this->sock, rbuf, sizeof(rbuf) - 1, 0);
+		if (rc < 0) {
+			return std::string();
+		}
+
+		return std::string(rbuf);
+	}
+
+	return std::string();
+}
+
+#pragma endregion
+
 #pragma region // OOLog
 
-OOLog::OOLog(const std::string & funcName) {
+OOLog::OOLog(const std::string & funcName, OOTcpClient* tcpRef) {
 	this->debugLogStream << funcName << ": ";
+	this->tcpClient = tcpRef;
 }
 
 OOLog::~OOLog() {
-	// Print the stream to debug output.
+	// Append a newline (and also flush the stream).
 	this->debugLogStream << std::endl;
-	printf("%s", this->debugLogStream.str().c_str());
 
-	// Clear the stream
-	this->debugLogStream.clear();
+	// get stream contents as a string.
+	const std::string& str = this->debugLogStream.str();
+
+	// either printf it or send via tcp.
+	if (this->tcpClient == nullptr) {
+		printf("%s", str.c_str());
+	}
+	else {
+		this->tcpClient->Send(str);
+		this->tcpClient->Flush();
+	}
 }
 
 #pragma endregion
@@ -237,11 +349,6 @@ void OOPNG::Draw(OOScene2D *scene, int startX, int startY) {
 	// Iterate the bitmap and draw the pixels
 	for (int yPos = 0; yPos < this->height; yPos++) {
 		for (int xPos = 0; xPos < this->width; xPos++) {
-			// Do some bounds checking to make sure the pixel is actually inside the frame buffer
-			if (xPos < 0 || yPos < 0 || xPos >= this->width || yPos >= this->height) {
-				continue;
-			}
-
 			// Decode the 32-bit color
 			uint32_t encodedColor = this->img[(yPos * this->width) + xPos];
 
@@ -273,6 +380,8 @@ OOScene2D::OOScene2D(int w, int h, int pixelDepth) {
 	DEBUGLOG << "[DEBUG] [SCENE2D] Width/Height/Depth | " << this->width << "/" << this->height << "/" << this->depth;
 
 	this->frameBufferSize = this->width * this->height * this->depth;
+	this->activeFrameBufferIdx = 0;
+	this->frameID = 0;
 }
 
 OOScene2D::~OOScene2D() {
@@ -287,10 +396,9 @@ OOScene2D::~OOScene2D() {
 
 bool OOScene2D::Init(size_t memSize, int numFrameBuffers) {
 	int rc;
+	this->videoMem = nullptr;
 
 	this->video = sceVideoOutOpen(ORBIS_VIDEO_USER_MAIN, ORBIS_VIDEO_OUT_BUS_MAIN, 0, 0);
-	this->videoMem = nullptr;
-	this->videoMemSP = nullptr;
 
 	if (this->video < 0) {
 		DEBUGLOG << "[DEBUG] [SCENE2D] Failed to open a video out handle: " << std::string(strerror(errno));
@@ -300,7 +408,7 @@ bool OOScene2D::Init(size_t memSize, int numFrameBuffers) {
 	// Load freetype
 	rc = sceSysmoduleLoadModule(0x009A);
 
-	if (rc < 0) {
+	if (rc != ORBIS_OK) {
 		DEBUGLOG << "[DEBUG] [SCENE2D] Failed to load freetype: " << std::string(strerror(errno));
 		return false;
 	}
@@ -349,14 +457,14 @@ bool OOScene2D::allocateFrameBuffers(int num) {
 
 	// Set the display buffers
 	for (int i = 0; i < num; i++) {
-		this->frameBuffers[i] = this->allocateDisplayMem(frameBufferSize);
+		this->frameBuffers[i] = this->allocateDisplayMem(this->frameBufferSize);
 	}
 
 	// Set SRGB pixel format
 	sceVideoOutSetBufferAttribute(&this->attr, 0x80000000, 1, 0, this->width, this->height, this->width);
 
 	// Register the buffers to the video handle
-	return (sceVideoOutRegisterBuffers(this->video, 0, reinterpret_cast<void**>(this->frameBuffers), num, &this->attr) == 0);
+	return (sceVideoOutRegisterBuffers(this->video, 0, (void **)this->frameBuffers, num, &this->attr) == ORBIS_OK);
 }
 
 char *OOScene2D::allocateDisplayMem(size_t size) {
@@ -394,7 +502,8 @@ bool OOScene2D::allocateVideoMem(size_t size, int alignment) {
 	}
 
 	// Set the stack pointer to the beginning of the buffer
-	this->videoMemSP = reinterpret_cast<char*>(this->videoMem);
+	this->videoMemSP = reinterpret_cast<char *>(this->videoMem);
+
 	return true;
 }
 
@@ -454,8 +563,7 @@ void OOScene2D::FrameBufferSwap() {
 
 void OOScene2D::FrameBufferClear() {
 	// Clear the screen with a black frame buffer
-	Color blank = { 0, 0, 0, 255 };
-	this->FrameBufferFill(blank);
+	this->FrameBufferFill(COLOR_BLACK);
 }
 
 int OOScene2D::InitPNG(const std::string& fname) {
@@ -578,7 +686,7 @@ bool OOScene2D::FreeFont(int index) {
 }
 
 void OOScene2D::FrameBufferFill(Color color) {
-	DrawRectangle(0, 0, this->width, this->height, color);
+	this->DrawRectangle(0, 0, this->width, this->height, color);
 }
 
 void OOScene2D::DrawPixel(int x, int y, Color color) {
@@ -608,7 +716,7 @@ bool OOScene2D::GetPixel(int x, int y, Color* out) {
 	out->r = (col >> 16) & 0xFF;
 	out->g = (col >> 8) & 0xFF;
 	out->b = col & 0xFF;
-	out->a = 255;
+	out->a = 255; // no alpha.
 
 	return true;
 }
@@ -619,7 +727,7 @@ void OOScene2D::DrawRectangle(int x, int y, int w, int h, Color color) {
 	// Draw row-by-row, column-by-column
 	for (yPos = y; yPos < y + h; yPos++) {
 		for (xPos = x; xPos < x + w; xPos++) {
-			DrawPixel(xPos, yPos, color);
+			this->DrawPixel(xPos, yPos, color);
 		}
 	}
 }
@@ -1190,10 +1298,14 @@ bool OOAudio::FreeSound(int index) {
 
 #pragma region // OOToolkit
 
+OOToolkit* g_ToolkitInstance = nullptr;
+
 OOToolkit::OOToolkit() {
 	// No buffering
 	setvbuf(stdout, NULL, _IONBF, 0);
 	DEBUGLOG << "[DEBUG] [TOOLKIT] OpenOrbis Toolkit by nik.";
+
+	g_ToolkitInstance = this;
 }
 
 OOToolkit::~OOToolkit() {
@@ -1225,6 +1337,15 @@ OOController *OOToolkit::GetController() {
 	}
 
 	return this->Controller.get();
+}
+
+OOTcpClient *OOToolkit::GetTcpClient() {
+	if (this->TcpClient.get() == nullptr) {
+		// we must not DEBUGLOG here!
+		this->TcpClient.reset(new OOTcpClient());
+	}
+
+	return this->TcpClient.get();
 }
 
 #pragma endregion

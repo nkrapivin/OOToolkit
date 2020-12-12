@@ -26,7 +26,7 @@
 #include <orbis/SystemService.h>
 
 #define GRAPHICS_USES_FONT
-#define DEBUGLOG OOLog(__FUNCTION__)
+#define DEBUGLOG OOLog(__FUNCTION__, (g_ToolkitInstance ? (g_ToolkitInstance->GetTcpClient()->IsConnected() ? g_ToolkitInstance->GetTcpClient() : nullptr) : nullptr))
 #define CONTROLLER_ANY_USER (-1)
 
 #define AUDIO_GRAIN (256)
@@ -34,9 +34,9 @@
 // color defines.
 #define COLOR_WHITE { 255, 255, 255, 255 }
 #define COLOR_BLACK { 0,   0,   0,   255 }
-#define COLOR_RED   { 255, 0, 0, 255 }
-#define COLOR_GREEN { 0, 255, 0, 255 }
-#define COLOR_BLUE  { 0, 0, 255, 255 }
+#define COLOR_RED   { 255, 0,   0,   255 }
+#define COLOR_GREEN { 0,   255, 0,   255 }
+#define COLOR_BLUE  { 0,   0,   255, 255 }
 
 // Never call this function, it's called by OOToolkit automatically when an error occurs.
 void OOerrorOut(const char* file, const char* func, int line, const char* msg = nullptr);
@@ -60,10 +60,38 @@ struct SpriteDim {
 	int c; // channels
 };
 
+// a stringstream tcp socket.
+class OOTcpClient {
+	std::stringstream myStream;
+	int sock;
+	bool connected;
+public:
+
+	OOTcpClient();
+	~OOTcpClient();
+
+	bool IsConnected();
+	void Connect(const std::string& ip, uint16_t port);
+	ssize_t Flush();
+	std::string Receive();
+
+	template <class T> void Send(const T &v) {
+		if (this->connected) {
+			this->myStream << v;
+		}
+	}
+
+	template <class T> OOTcpClient& operator<<(const T &v) {
+		this->Send(v);
+		return *this;
+	}
+};
+
 class OOLog {
 	std::stringstream debugLogStream;
+	OOTcpClient* tcpClient;
 public:
-	OOLog(const std::string & funcName);
+	OOLog(const std::string & funcName, OOTcpClient* tcpRef = nullptr);
 	~OOLog();
 
 	template <class T> OOLog& operator<<(const T &v) {
@@ -134,7 +162,7 @@ class OOScene2D {
 	off_t directMemOff;
 	size_t directMemAllocationSize;
 
-	char* videoMemSP;
+	char *videoMemSP;
 	void *videoMem;
 
 	char **frameBuffers;
@@ -252,6 +280,7 @@ private:
 	std::unique_ptr<OOAudio> Audio;
 	std::unique_ptr<OOScene2D> Scene2D;
 	std::unique_ptr<OOController> Controller;
+	std::unique_ptr<OOTcpClient> TcpClient;
 
 public:
 
@@ -261,6 +290,9 @@ public:
 	OOAudio *GetAudio();
 	OOScene2D *GetScene2D(int sceneWidth = 0, int sceneHeight = 0, int pixelDepth = 4); // 4 - RGBA
 	OOController *GetController();
+	OOTcpClient *GetTcpClient();
 };
+
+extern OOToolkit* g_ToolkitInstance;
 
 #endif /* _OOTOOLKIT_H_ */

@@ -20,7 +20,7 @@
 
 class Application {
 
-	std::unique_ptr<OOToolkit> kit;
+	OOToolkit* kit;
 
 	std::vector<int> fonts;
 	std::vector<int> sounds;

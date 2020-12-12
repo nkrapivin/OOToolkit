@@ -41,3 +41,9 @@ Rem Build package
 echo %outputPath%
 set outPathDequot=%outputPath:"=%
 %OO_PS4_TOOLCHAIN%\bin\windows\PkgTool.exe pkg_build %outPathDequot%pkg\pkg.gp4 %outPathDequot%
+
+Rem Send package
+set pkgName=IV1337-BREW01010_00-OPENORBISTOOLKIT.pkg
+set ps4url=192.168.1.239:12800
+set pcurl=192.168.1.218:5000
+curl -v "http://%ps4url%/api/install" --data "{""type"":""direct"",""packages"":[""http://%pcurl%/%pkgName%""]}"
