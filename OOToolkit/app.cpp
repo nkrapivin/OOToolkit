@@ -6,7 +6,6 @@ Application::Application() {
 
 Application::~Application() {
 	this->Quit();
-	delete this->kit;
 }
 
 void Application::Load() {
@@ -14,19 +13,19 @@ void Application::Load() {
 	this->counter = 0;
 
 	// initialize OOToolkit and it's subsystems.
-	this->kit = new OOToolkit();
-	this->kit->GetTcpClient()->Connect("192.168.1.218", 9190);
+	this->kit.reset(new OOToolkit());
+	this->kit->GetTcpClient()->Init("192.168.1.218", 9190); // this will switch from stdout to TCP logging!
 	this->kit->GetController()->Init(CONTROLLER_ANY_USER);
-	this->kit->GetScene2D(FRAME_WIDTH, FRAME_HEIGHT, FRAME_DEPTH)->Init(FRAME_MEMSIZE, FRAME_NUMBUF);
+	this->kit->GetScene2D()->Init(FRAME_WIDTH, FRAME_HEIGHT, FRAME_DEPTH, FRAME_MEMSIZE, FRAME_NUMBUF);
 	this->kit->GetAudio()->Init();
 
 	// set the drawing color.
 	this->drawCol = COLOR_WHITE;
 
 	// init prng
-	unsigned int seed = static_cast<unsigned int>((time(nullptr) & UINT32_MAX));
-	DEBUGLOG << "-> Seed " << seed;
-	srand(seed);
+	this->prngSeed = static_cast<unsigned int>((time(nullptr) & UINT32_MAX));
+	DEBUGLOG << "-> Seed " << this->prngSeed;
+	srand(this->prngSeed);
 
 	// init fonts.
 	DEBUGLOG << "-> Fonts!";
@@ -56,8 +55,6 @@ void Application::Load() {
 }
 
 bool Application::Frame() {
-
-	
 	this->kit->GetController()->UpdateState();
 	{
 		// Step Event
@@ -71,10 +68,7 @@ bool Application::Frame() {
 		// stop sound.
 		if (this->kit->GetController()->CheckButtonPressed(ORBIS_PAD_BUTTON_CIRCLE)) {
 			// this will stop all instances of all sounds..
-			for (auto& snd : this->sounds) {
-				DEBUGLOG << "Trying to stop sound " << snd;
-				this->kit->GetAudio()->StopSound(snd);
-			}
+			this->kit->GetAudio()->StopAllSounds();
 		}
 	}
 
@@ -91,7 +85,7 @@ bool Application::Frame() {
 
 		// get sprite w/h
 		SpriteDim sd;
-		this->kit->GetScene2D()->CalcSpriteDim(catsprite, &sd);
+		this->kit->GetScene2D()->CalcSpriteDim(catsprite, sd);
 
 		// reset our frame counter.
 		if (counter > FRAME_WIDTH) {
@@ -100,7 +94,7 @@ bool Application::Frame() {
 
 		// get stick x/y
 		stick ls = { 0, 0 };
-		this->kit->GetController()->GetStick(false, &ls);
+		this->kit->GetController()->GetStick(false, ls);
 
 		// make our draw string.
 		dr <<

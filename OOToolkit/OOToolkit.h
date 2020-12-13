@@ -25,18 +25,24 @@
 #include <orbis/AudioOut.h>
 #include <orbis/SystemService.h>
 
-#define GRAPHICS_USES_FONT
+// this will log to stdout if no TCP connection was established, or to TCP...
 #define DEBUGLOG OOLog(__FUNCTION__, (g_ToolkitInstance ? (g_ToolkitInstance->GetTcpClient()->IsConnected() ? g_ToolkitInstance->GetTcpClient() : nullptr) : nullptr))
+#define STDOUTLOG OOLog(__FUNCTION__, nullptr)
 #define CONTROLLER_ANY_USER (-1)
 
+// used in OOAudio
 #define AUDIO_GRAIN (256)
 
-// color defines.
+// basic color defines.
+//                    R    G    B    A
+#define COLOR_ZERO  { 0,   0,   0,   0   } /* can be used to zero-out color structures. */
 #define COLOR_WHITE { 255, 255, 255, 255 }
 #define COLOR_BLACK { 0,   0,   0,   255 }
 #define COLOR_RED   { 255, 0,   0,   255 }
 #define COLOR_GREEN { 0,   255, 0,   255 }
 #define COLOR_BLUE  { 0,   0,   255, 255 }
+
+#define MAX_TCP_PKT (65535)
 
 // Never call this function, it's called by OOToolkit automatically when an error occurs.
 void OOerrorOut(const char* file, const char* func, int line, const char* msg = nullptr);
@@ -71,15 +77,10 @@ public:
 	~OOTcpClient();
 
 	bool IsConnected();
-	void Connect(const std::string& ip, uint16_t port);
+	void Init(const std::string& ip, uint16_t port, bool sendMsg = true);
 	ssize_t Flush();
 	std::string Receive();
-
-	template <class T> void Send(const T &v) {
-		if (this->connected) {
-			this->myStream << v;
-		}
-	}
+	template <class T> void Send(const T &v);
 
 	template <class T> OOTcpClient& operator<<(const T &v) {
 		this->Send(v);
@@ -126,7 +127,7 @@ public:
 	int SetVibration(OrbisPadVibeParam param);
 	OrbisPadVibeParam GetVibration();
 
-	int GetStick(bool get_right_stick, stick* out);
+	int GetStick(bool get_right_stick, stick& out);
 
 	std::string GetUserName();
 };
@@ -145,8 +146,9 @@ public:
 	~OOPNG();
 
 	bool IsFreed();
-	void Draw(OOScene2D *scene, int startX, int startY);
-	void GetInfo(SpriteDim* out);
+	void Draw(OOScene2D& scene, int startX, int startY);
+	void DrawPart(OOScene2D& scene, int startX, int startY, int left, int top, int width, int height);
+	void GetInfo(SpriteDim& out);
 };
 
 class OOScene2D {
@@ -184,13 +186,13 @@ class OOScene2D {
 	bool initFont(FT_Face *face, const char *fontPath, int fontSize);
 	bool initMemFont(FT_Face *face, size_t bufSize, unsigned char* fontBuf, int fontSize);
 	void drawText(const char *txt, FT_Face face, int startX, int startY, Color col);
-	void calcTextDim(const char *txt, FT_Face face, TextDim *textDimm);
+	void calcTextDim(const char *txt, FT_Face face, TextDim& textDimm);
 
 public:
-	OOScene2D(int w, int h, int pixelDepth);
+	OOScene2D();
 	~OOScene2D();
 
-	bool Init(size_t memSize, int numFrameBuffers);
+	bool Init(int w, int h, int pixelDepth, size_t memSize, int numFrameBuffers);
 
 	void SetActiveFrameBuffer(int index);
 	void SubmitFlip(int frameID);
@@ -203,13 +205,14 @@ public:
 	void DrawPixel(int x, int y, Color color);
 	void DrawRectangle(int x, int y, int w, int h, Color color);
 	void DrawPNG(int x, int y, int index);
+	void DrawPNGPart(int x, int y, int left, int top, int width, int height, int index);
 
-	bool GetPixel(int x, int y, Color* out);
+	bool GetPixel(int x, int y, Color& out);
 
 	int InitPNG(const std::string& fname);
 	int InitPNG(size_t bufSize, unsigned char *pngBuf);
 	void FreePNG(int index);
-	void CalcSpriteDim(int sprite, SpriteDim *out);
+	void CalcSpriteDim(int sprite, SpriteDim& out);
 
 	void Commit();
 
@@ -217,8 +220,8 @@ public:
 	int InitFont(size_t bufSize, unsigned char *fontBuf, int fontSize);
 	bool FreeFont(int index);
 	void DrawText(const std::string& txt, int font, int startX, int startY, Color col);
-	void CalcTextDim(const std::string& txt, int font, TextDim *textDimm);
-	void DrawTextContainer(char *txt, FT_Face face, int startX, int startY, int maxW, int maxH);
+	void CalcTextDim(const std::string& txt, int font, TextDim& textDimm);
+	void DrawTextContainer(const std::string& txt, int font, int startX, int startY, int maxW, int maxH);
 };
 
 struct OOSampleData {
@@ -269,6 +272,7 @@ public:
 
 	bool FreeSound(int index);
 	void StopSound(int sound_or_inst);
+	void StopAllSounds();
 	void PauseSound(int index, bool pause_or_not);
 	bool IsPaused(int index);
 	bool IsPlaying(int index);
@@ -288,7 +292,7 @@ public:
 	~OOToolkit();
 
 	OOAudio *GetAudio();
-	OOScene2D *GetScene2D(int sceneWidth = 0, int sceneHeight = 0, int pixelDepth = 4); // 4 - RGBA
+	OOScene2D *GetScene2D();
 	OOController *GetController();
 	OOTcpClient *GetTcpClient();
 };

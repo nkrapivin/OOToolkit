@@ -47,17 +47,24 @@ OOTcpClient::~OOTcpClient() {
 	}
 }
 
-void OOTcpClient::Connect(const std::string& host, uint16_t port) {
+void OOTcpClient::Init(const std::string& host, uint16_t port, bool sendMsg) {
 	int rc;
 	struct sockaddr_in server_address;
+	fd_set myset;
 	int enable = 1;
+	timeval tv;
+	tv.tv_sec = 2; // connection timeout is very small so the app won't hang for a long time.
+	tv.tv_usec = 0;
 	timespec ts;
 	ts.tv_sec = 5;
 	ts.tv_nsec = 0;
-
 	this->connected = false;
+
+	STDOUTLOG << "Connecting...";
+	
 	this->sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 	if (this->sock < 0) {
+		STDOUTLOG << " err " << __LINE__;
 		return;
 	}
 
@@ -65,27 +72,96 @@ void OOTcpClient::Connect(const std::string& host, uint16_t port) {
 	setsockopt(this->sock, SOL_SOCKET, 0x0008, reinterpret_cast<void*>(&enable), sizeof(enable));
 	setsockopt(this->sock, SOL_SOCKET, 0x1006, reinterpret_cast<void*>(&ts), sizeof(ts));
 
+	// set non-blocking mode
+	int flags = fcntl(this->sock, F_GETFL, 0);
+	fcntl(this->sock, F_SETFL, flags | O_NONBLOCK);
+
+	// try to parse IP address.
+	in_addr parsed;
+	memset(&parsed, 0, sizeof(parsed));
+	rc = inet_aton(host.c_str(), &parsed);
+	if (rc == 0) {
+		STDOUTLOG << "Failed to parse IP Address!";
+		goto cleanupsock;
+	}
+
 	// prepare server address structure.
 	memset(&server_address, 0, sizeof(server_address));
 	server_address.sin_family = AF_INET;
 	server_address.sin_port = htons(port);
-	server_address.sin_addr.s_addr = inet_addr(host.c_str());
+	server_address.sin_addr = parsed;
 
+	// try to connect.
 	rc = connect(this->sock, reinterpret_cast<const sockaddr *>(&server_address), sizeof(server_address));
 	if (rc < 0) {
-		close(this->sock);
-		return;
+		if (errno == 36) {
+			do {
+				FD_ZERO(&myset);
+				FD_SET(this->sock, &myset);
+				rc = select(this->sock + 1, nullptr, &myset, nullptr, &tv);
+				if (rc < 0 && errno != EINTR) {
+					// unable to connect.
+					STDOUTLOG << " err " << __LINE__;
+					goto cleanupsock;
+				}
+				else if (rc > 0) {
+					// socket selected for write.
+					socklen_t rclen = sizeof(rc);
+					if (getsockopt(this->sock, SOL_SOCKET, 0x1007, &rc, &rclen) < 0) {
+						// unable to check for the error opt.
+						STDOUTLOG << " err " << __LINE__;
+						goto cleanupsock;
+					}
+
+					if (rc) {
+						// there's some error in the connection.
+						STDOUTLOG << " err " << __LINE__;
+						goto cleanupsock;
+					}
+
+					// no errors, we are connected!!!
+					break;
+				}
+				else {
+					// timeout in select.
+					STDOUTLOG << " err " << __LINE__;
+					goto cleanupsock;
+				}
+			} while (true);
+		}
+		else {
+			// error connecting.
+			STDOUTLOG << " err " << __LINE__;
+			goto cleanupsock;
+		}
 	}
 
-	// send a dummy message to be SURE we're connected.
-	const char* msg = "Hello from OOToolkit!\n";
-	rc = send(this->sock, msg, strlen(msg), 0);
-	if (rc != strlen(msg)) {
-		close(this->sock);
-		return;
+	// set blocking mode again.
+	flags = fcntl(this->sock, F_GETFL, 0);
+	fcntl(this->sock, F_SETFL, flags & (~O_NONBLOCK));
+
+	// send a dummy message to be SURE we're connected and can send messages, but only if we need this.
+	if (sendMsg) {
+		const char* msg = "Hello from OOToolkit!\n";
+		size_t len = strlen(msg);
+		rc = send(this->sock, msg, len, 0);
+		if (rc != len) {
+			goto cleanupsock;
+		}
 	}
 
 	this->connected = true;
+	return;
+
+cleanupsock:
+	close(this->sock);
+	return;
+}
+
+template <class T> void OOTcpClient::Send(const T &v) {
+	if (this->connected) {
+		this->myStream << v;
+	}
 }
 
 bool OOTcpClient::IsConnected() {
@@ -114,17 +190,21 @@ ssize_t OOTcpClient::Flush() {
 std::string OOTcpClient::Receive() {
 	if (this->connected) {
 		ssize_t rc;
-		char rbuf[65535 + 1]; // 1 - nullbyte.
+		char rbuf[MAX_TCP_PKT];
 		memset(rbuf, 0, sizeof(rbuf));
 
-		rc = recv(this->sock, rbuf, sizeof(rbuf) - 1, 0);
+		rc = recv(this->sock, rbuf, sizeof(rbuf), 0);
 		if (rc < 0) {
+			// we shouldn't crash here, that's fine, the server may have disconnected
 			return std::string();
 		}
 
-		return std::string(rbuf);
+		// specify the length, because the recv data may contain nullbytes.
+		return std::string(rbuf, rc);
 	}
 
+	// okay now this is wrong.
+	//OOCRASHMSG("Tried to receive data from a non-connected socket.");
 	return std::string();
 }
 
@@ -177,7 +257,7 @@ void OOerrorOut(const char* file, const char* func, int line, const char* msg) {
 #pragma region // OOController
 
 OOController::OOController() {
-
+	this->pad = -1;
 }
 
 OOController::~OOController() {
@@ -271,22 +351,20 @@ int OOController::SetVibration(OrbisPadVibeParam param) {
 	return scePadSetVibration(this->pad, &this->lastVib);
 }
 
-int OOController::GetStick(bool get_right_stick, stick* out) {
-
-	if (out == nullptr) {
-		return 0;
-	}
+int OOController::GetStick(bool get_right_stick, stick& out) {
+	if (this->pad < 0) return 0;
 
 	if (get_right_stick) {
-		out->x = this->padData.rightStick.x;
-		out->y = this->padData.rightStick.y;
-		return 1;
+		out.x = this->padData.rightStick.x;
+		out.y = this->padData.rightStick.y;
+		
 	}
 	else {
-		out->x = this->padData.leftStick.x;
-		out->y = this->padData.leftStick.y;
-		return 1;
+		out.x = this->padData.leftStick.x;
+		out.y = this->padData.leftStick.y;
 	}
+
+	return 1;
 }
 
 OrbisPadVibeParam OOController::GetVibration() {
@@ -328,27 +406,30 @@ OOPNG::~OOPNG() {
 	}
 }
 
-void OOPNG::GetInfo(SpriteDim* ptr) {
-	if (ptr != nullptr) {
-		ptr->w = this->width;
-		ptr->h = this->height;
-		ptr->c = this->channels;
-	}
+void OOPNG::GetInfo(SpriteDim& sdim) {
+	sdim.w = this->width;
+	sdim.h = this->height;
+	sdim.c = this->channels;
 }
 
 bool OOPNG::IsFreed() {
 	return this->img == nullptr;
 }
 
-void OOPNG::Draw(OOScene2D *scene, int startX, int startY) {
+void OOPNG::DrawPart(OOScene2D& scene, int startX, int startY, int left, int top, int width, int height) {
 	// Don't draw non-existant images
 	if (this->img == nullptr) {
 		OOCRASHMSG("Trying to draw a non-existant image!");
 	}
 
+	// error checking.
+	if (width > this->width || height > this->height || width < 0 || height < 0) {
+		OOCRASHMSG("Invalid width/height passed to DrawPart.");
+	}
+
 	// Iterate the bitmap and draw the pixels
-	for (int yPos = 0; yPos < this->height; yPos++) {
-		for (int xPos = 0; xPos < this->width; xPos++) {
+	for (int yPos = top; yPos < height; yPos++) {
+		for (int xPos = left; xPos < width; xPos++) {
 			// Decode the 32-bit color
 			uint32_t encodedColor = this->img[(yPos * this->width) + xPos];
 
@@ -363,25 +444,29 @@ void OOPNG::Draw(OOScene2D *scene, int startX, int startY) {
 
 			Color color = { r, g, b, 255 };
 
-			scene->DrawPixel(x, y, color);
+			scene.DrawPixel(x, y, color);
 		}
 	}
+}
+
+void OOPNG::Draw(OOScene2D& scene, int startX, int startY) {
+	this->DrawPart(scene, startX, startY, 0, 0, this->width, this->height);
 }
 
 #pragma endregion
 
 #pragma region // OOScene2D
 
-OOScene2D::OOScene2D(int w, int h, int pixelDepth) {
-	this->width = w;
-	this->height = h;
-	this->depth = pixelDepth;
-
-	DEBUGLOG << "[DEBUG] [SCENE2D] Width/Height/Depth | " << this->width << "/" << this->height << "/" << this->depth;
-
-	this->frameBufferSize = this->width * this->height * this->depth;
+OOScene2D::OOScene2D() {
+	// zero-out pointers and variables.
+	this->width = 0;
+	this->height = 0;
+	this->depth = 0;
+	this->frameBufferSize = 0;
 	this->activeFrameBufferIdx = 0;
 	this->frameID = 0;
+	this->videoMem = nullptr;
+	this->videoMemSP = nullptr;
 }
 
 OOScene2D::~OOScene2D() {
@@ -394,9 +479,13 @@ OOScene2D::~OOScene2D() {
 	DEBUGLOG << "[DEBUG] [SCENE2D] FreeType freed!";
 }
 
-bool OOScene2D::Init(size_t memSize, int numFrameBuffers) {
+bool OOScene2D::Init(int w, int h, int pixelDepth, size_t memSize, int numFrameBuffers) {
 	int rc;
-	this->videoMem = nullptr;
+
+	this->width = w;
+	this->height = h;
+	this->depth = pixelDepth;
+	this->frameBufferSize = this->width * this->height * this->depth;
 
 	this->video = sceVideoOutOpen(ORBIS_VIDEO_USER_MAIN, ORBIS_VIDEO_OUT_BUS_MAIN, 0, 0);
 
@@ -589,7 +678,19 @@ void OOScene2D::DrawPNG(int x, int y, int index) {
 		OOCRASHMSG("PNG is freed.");
 	}
 
-	this->sprites[index].Draw(this, x, y);
+	this->sprites[index].Draw(*this, x, y);
+}
+
+void OOScene2D::DrawPNGPart(int x, int y, int left, int top, int width, int height, int index) {
+	if (index < 0 || index > this->sprites.size() - 1) {
+		OOCRASHMSG("PNG index out of range.");
+	}
+
+	if (this->sprites[index].IsFreed()) {
+		OOCRASHMSG("PNG is freed.");
+	}
+
+	this->sprites[index].DrawPart(*this, x, y, left, top, width, height);
 }
 
 void OOScene2D::FreePNG(int index) {
@@ -604,7 +705,7 @@ void OOScene2D::FreePNG(int index) {
 	this->sprites[index].~OOPNG();
 }
 
-void OOScene2D::CalcSpriteDim(int sprite, SpriteDim *out) {
+void OOScene2D::CalcSpriteDim(int sprite, SpriteDim& out) {
 	if (sprite < 0 || sprite > this->sprites.size() - 1) {
 		OOCRASHMSG("PNG index out of range.");
 	}
@@ -700,9 +801,9 @@ void OOScene2D::DrawPixel(int x, int y, Color color) {
 	((uint32_t *)this->frameBuffers[this->activeFrameBufferIdx])[pixel] = encodedColor;
 }
 
-bool OOScene2D::GetPixel(int x, int y, Color* out) {
+bool OOScene2D::GetPixel(int x, int y, Color& color) {
 	// Error checking.
-	if (out == nullptr || x < 0 || y < 0 || x >= this->width || y >= this->height) {
+	if (x < 0 || y < 0 || x >= this->width || y >= this->height) {
 		return false;
 	}
 
@@ -713,10 +814,10 @@ bool OOScene2D::GetPixel(int x, int y, Color* out) {
 	uint32_t col = ((uint32_t *)this->frameBuffers[this->activeFrameBufferIdx])[pixel];
 
 	// Return color.
-	out->r = (col >> 16) & 0xFF;
-	out->g = (col >> 8) & 0xFF;
-	out->b = col & 0xFF;
-	out->a = 255; // no alpha.
+	color.r = (col >> 16) & 0xFF;
+	color.g = (col >> 8) & 0xFF;
+	color.b = col & 0xFF;
+	color.a = 0xFF; // no alpha.
 
 	return true;
 }
@@ -732,7 +833,7 @@ void OOScene2D::DrawRectangle(int x, int y, int w, int h, Color color) {
 	}
 }
 
-void OOScene2D::DrawTextContainer(char *txt, FT_Face face, int startX, int startY, int maxW, int maxH) {
+void OOScene2D::DrawTextContainer(const std::string& txt, int font, int startX, int startY, int maxW, int maxH) {
 	DEBUGLOG << "[DEBUG] [SCENE2D] DrawTextContainer() Function not implemented!";
 }
 
@@ -817,7 +918,7 @@ int getNewLine(FT_Face face) {
 	return (face->glyph->bitmap.width * 2);
 }
 
-void OOScene2D::calcTextDim(const char *txt, FT_Face face, TextDim *textDimm) {
+void OOScene2D::calcTextDim(const char *txt, FT_Face face, TextDim& textDimm) {
 	int rc;
 	int xOffset = 0;
 	int yOffset = 0;
@@ -827,8 +928,8 @@ void OOScene2D::calcTextDim(const char *txt, FT_Face face, TextDim *textDimm) {
 
 	// Iterate each character of the text to write to the screen
 	size_t len = strlen(txt);
-	textDimm->h = getNewLine(face);
-	int nl = textDimm->h;
+	textDimm.h = getNewLine(face);
+	int nl = textDimm.h;
 	for (int n = 0; n < len; n++) {
 		FT_UInt glyph_index;
 
@@ -850,7 +951,7 @@ void OOScene2D::calcTextDim(const char *txt, FT_Face face, TextDim *textDimm) {
 		if (txt[n] == '\n') {
 			xOffset = 0;
 			yOffset += slot->bitmap.width * 2; // what the hell? that makes no sense!
-			textDimm->h += nl;
+			textDimm.h += nl;
 			continue;
 		}
 
@@ -858,13 +959,13 @@ void OOScene2D::calcTextDim(const char *txt, FT_Face face, TextDim *textDimm) {
 		xOffset += slot->advance.x >> 6;
 
 		// Update the x size to be the *widest* offset (in case of multiple lines that's important)
-		if (textDimm->w < xOffset) {
-			textDimm->w = xOffset;
+		if (textDimm.w < xOffset) {
+			textDimm.w = xOffset;
 		}
 	}
 }
 
-void OOScene2D::CalcTextDim(const std::string& txt, int font, TextDim *textDimm) {
+void OOScene2D::CalcTextDim(const std::string& txt, int font, TextDim& textDimm) {
 	if (font < 0 || font > this->fonts.size() - 1) {
 		OOCRASHMSG("Invalid font index.");
 	}
@@ -1182,18 +1283,23 @@ bool OOAudio::IsPaused(int id) {
 	}
 	else {
 		int i = 0;
+		bool atleastOnePaused = false;
+
 		this->audioThreadMutex.lock();
 		for (auto& dat : this->audioThreadData) {
 			if (dat.mysound == id) {
-				bool ret = dat.pause && !dat.done;
-				this->audioThreadMutex.unlock();
-				return ret;
+				bool ret = dat.pause && !dat.done; // pause, and thread not stopped.
+				if (ret) {
+					// okay so we have at least one paused instance.
+					atleastOnePaused = true;
+					break;
+				}
 			}
 			i++;
 		}
-
 		this->audioThreadMutex.unlock();
-		return false;
+
+		return atleastOnePaused;
 	}
 }
 
@@ -1208,18 +1314,23 @@ bool OOAudio::IsPlaying(int id) {
 	}
 	else {
 		int i = 0;
+		bool atleastOnePlaying = false;
+
 		this->audioThreadMutex.lock();
 		for (auto& dat : this->audioThreadData) {
-			if (dat.mysound == id) {
-				bool ret = !dat.done && !dat.pause && !dat.stop;
-				this->audioThreadMutex.unlock();
-				return ret;
+			if (dat.mysound == id && !dat.done) {
+				bool ret = !dat.done && !dat.pause && !dat.stop; // not done, not stopped, and not paused.
+				if (ret) {
+					// okay so at least one thread is still playing the sound...
+					atleastOnePlaying = true;
+					break;
+				}
 			}
 			i++;
 		}
-
 		this->audioThreadMutex.unlock();
-		return false;
+
+		return atleastOnePlaying;
 	}
 }
 
@@ -1252,6 +1363,28 @@ void OOAudio::StopSound(int id) {
 
 		this->audioThreadMutex.unlock();
 	}
+}
+
+void OOAudio::StopAllSounds() {
+	DEBUGLOG << "[DEBUG] [AUDIO] Going to stop ALL playing sounds!";
+
+	this->audioThreadMutex.lock();
+
+	int i = 0;
+	for (auto& dat : this->audioThreadData) {
+		if (!dat.done && !dat.stop) {
+			dat.stop = true; // stop means notify the thread that it should stop itself.
+			// done parameter is only set by the thread.
+
+			if (this->audioThreads[i].joinable()) {
+				this->audioThreads[i].join();
+			}
+		}
+
+		i++;
+	}
+
+	this->audioThreadMutex.unlock();
 }
 
 void OOAudio::PauseSound(int id, bool pause) {
@@ -1321,10 +1454,10 @@ OOAudio *OOToolkit::GetAudio() {
 	return this->Audio.get();
 }
 
-OOScene2D *OOToolkit::GetScene2D(int w, int h, int pixelDepth) {
+OOScene2D *OOToolkit::GetScene2D() {
 	if (this->Scene2D.get() == nullptr) {
 		DEBUGLOG << "[DEBUG] [TOOLKIT] Making Scene2D...";
-		this->Scene2D.reset(new OOScene2D(w, h, pixelDepth));
+		this->Scene2D.reset(new OOScene2D());
 	}
 
 	return this->Scene2D.get();
